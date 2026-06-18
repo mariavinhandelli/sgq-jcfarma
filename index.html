@@ -448,7 +448,7 @@ tr.selected td{background:#EBF4F7 !important}
           </div>
         </div>
       </div>
-      <div class="fg"><label class="fl">Status</label><select class="fi" id="dStat"><option value="v">Vigente</option><option value="p">Próximo do Vencimento</option><option value="x">Vencido</option></select></div>
+      <div class="fr"><div class="fg"><label class="fl">Status</label><select class="fi" id="dStat"><option value="v">Vigente</option><option value="p">Próximo do Vencimento</option><option value="x">Vencido</option></select></div><div class="fg"><label class="fl">Próxima revisão <span style="color:var(--t3);font-weight:400">(opcional)</span></label><input class="fi" type="date" id="dRevisar"/><div style="font-size:10.5px;color:var(--t3);margin-top:3px">Para revisão periódica (ex: POP a cada 2 anos)</div></div></div>
       <div class="fg" id="fgFilialDoc" style="display:none"><label class="fl">Filial do Documento <span style="color:var(--er)">*</span></label>
           <select class="fi" id="dFilial"></select>
         </div>
@@ -1029,7 +1029,34 @@ async function buildNotifs(){
     });
   } catch(e){ auditAlerts2=[]; }
 
-  const allNotifs = [...retAlerts, ...auditAlerts2, ...popsAlerts, ...eficAlerts, ...eficWarn, ...notifs];
+  // Dynamic: Revisão periódica — documentos com revisar_em se aproximando ou vencido
+  // (ciclo de revisão independente do vencimento — ex: POPs revisados a cada 2 anos)
+  let revAlerts = [];
+  try {
+    const limRev = new Date(hoje0); limRev.setDate(hoje0.getDate() + (CFG.alert_dias||30));
+    let revQ = sb.from('documentos')
+      .select('id,nome,revisar_em,filial,modulo')
+      .eq('obsoleto', false)
+      .is('excluido_em', null)
+      .not('revisar_em', 'is', null)
+      .lte('revisar_em', limRev.toISOString().split('T')[0]);
+    if(filialAtiva && filialAtiva !== 'todas') revQ = revQ.eq('filial', filialAtiva);
+    const { data: revDocs } = await revQ;
+    revAlerts = (revDocs||[]).map(d => {
+      const dl = Math.ceil((new Date(d.revisar_em) - hoje0)/86400000);
+      const overdue = dl < 0;
+      return {
+        id: 'rev_'+d.id,
+        texto: overdue ? '🔄 Revisão periódica vencida' : '🔄 Revisão periódica em ' + dl + ' dias',
+        descricao: esc(d.nome) + (d.filial?' · '+esc(d.filial):'') + ' · ' + (overdue ? 'Revisar com urgência ('+Math.abs(dl)+'d em atraso)' : 'Revisar até ' + fd(d.revisar_em)),
+        tipo: overdue ? 'er' : (dl<=7?'wn':'in'),
+        lida: false,
+        _dynamic: true
+      };
+    });
+  } catch(e){ revAlerts=[]; }
+
+  const allNotifs = [...retAlerts, ...auditAlerts2, ...revAlerts, ...popsAlerts, ...eficAlerts, ...eficWarn, ...notifs];
   const unread = allNotifs.filter(n=>!n.lida).length;
   const bdg = document.getElementById('bdg');
   bdg.textContent = unread; bdg.style.display = unread ? 'flex' : 'none';
@@ -1157,7 +1184,7 @@ function newDoc(){
   document.getElementById('dId').value='';
   document.getElementById('mDocTit').innerHTML='<i class="ti ti-file-plus" style="color:var(--l)"></i>Novo Documento';
   ['dNome','dResp','dTags','dObs'].forEach(id=>{ document.getElementById(id).value=''; });
-  document.getElementById('dEmis').value=''; document.getElementById('dVal').value='';
+  document.getElementById('dEmis').value=''; document.getElementById('dVal').value=''; if(document.getElementById('dRevisar')) document.getElementById('dRevisar').value='';
   document.getElementById('dVer').value='1.0'; document.getElementById('dStat').value='v';
   document.getElementById('fInput').value='';
   const navToMod={reg:'Documentação Regulatória',alv_san:'Documentação Regulatória',alv_func:'Documentação Regulatória',crt:'Documentação Regulatória',cercon:'Documentação Regulatória',licamb:'Documentação Regulatória',projeto:'Documentação Regulatória',afe:'Documentação Regulatória',cnpj:'Documentação Regulatória',pops:'POPs',pgrss:'PGRSS',organo:'Organograma e MBP',servicos:'Serviços',dedet:'Serviços',agua:'Serviços',calib:'Serviços',qterm:'Serviços',bebed:'Serviços',clim:'Serviços',incin:'Serviços',extin:'Serviços',qualif:'Qualificações',qforn:'Qualificações',qcli:'Qualificações',qserv:'Qualificações',qsist:'Qualificações',trein:'Treinamentos',audit:'Auditorias'};
@@ -1193,6 +1220,7 @@ async function editDoc(id){
   document.getElementById('dResp').value=d.responsavel;
   document.getElementById('dEmis').value=d.data_emissao||'';
   document.getElementById('dVal').value=d.data_validade||'';
+  if(document.getElementById('dRevisar')) document.getElementById('dRevisar').value=d.revisar_em||'';
   document.getElementById('dVer').value=d.versao;
   document.getElementById('dStat').value=d.status;
   document.getElementById('dTags').value=d.tags||'';
@@ -1234,7 +1262,7 @@ async function saveDoc(){
   const docFilial = filialAtiva === 'todas' ? document.getElementById('dFilial').value : filialAtiva;
   const isIndet = document.getElementById('chkIndet').classList.contains('on');
   const isPopsPasta = curV==='pops' || (curPastaId && SMAP[curV]==='POPs');
-  const payload={ nome, modulo:document.getElementById('dMod').value, submodulo:document.getElementById('dSub').value, responsavel:document.getElementById('dResp').value||'Não informado', data_emissao:document.getElementById('dEmis').value||null, data_validade:isIndet?null:val||null, revisar_em:isPopsPasta&&!isIndet&&val?val:null, versao:document.getElementById('dVer').value||'1.0', status:isIndet?'v':val?calcStat(val):document.getElementById('dStat').value, tags:document.getElementById('dTags').value, observacoes:document.getElementById('dObs').value, filial:docFilial, pasta_id: curPastaId||null, val_indeterminada:isIndet };
+  const payload={ nome, modulo:document.getElementById('dMod').value, submodulo:document.getElementById('dSub').value, responsavel:document.getElementById('dResp').value||'Não informado', data_emissao:document.getElementById('dEmis').value||null, data_validade:isIndet?null:val||null, revisar_em:(document.getElementById('dRevisar')&&document.getElementById('dRevisar').value)?document.getElementById('dRevisar').value:(isPopsPasta&&!isIndet&&val?val:null), versao:document.getElementById('dVer').value||'1.0', status:isIndet?'v':val?calcStat(val):document.getElementById('dStat').value, tags:document.getElementById('dTags').value, observacoes:document.getElementById('dObs').value, filial:docFilial, pasta_id: curPastaId||null, val_indeterminada:isIndet };
   showLoading('Salvando...');
   let docId=id;
   if(id){ // Save current version before updating

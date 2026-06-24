@@ -448,7 +448,7 @@ tr.selected td{background:#EBF4F7 !important}
           </div>
         </div>
       </div>
-      <div class="fr"><div class="fg"><label class="fl">Status</label><select class="fi" id="dStat"><option value="v">Vigente</option><option value="p">Próximo do Vencimento</option><option value="x">Vencido</option></select></div><div class="fg"><label class="fl">Próxima revisão <span style="color:var(--t3);font-weight:400">(opcional)</span></label><input class="fi" type="date" id="dRevisar"/><div style="font-size:10.5px;color:var(--t3);margin-top:3px">Para revisão periódica (ex: POP a cada 2 anos)</div></div></div>
+      <div class="fr"><div class="fg"><label class="fl">Status</label><select class="fi" id="dStat"><option value="v">Vigente</option><option value="p">Próximo do Vencimento</option><option value="x">Vencido</option></select></div><div class="fg" id="fgRevisar"><label class="fl">Próxima revisão <span style="color:var(--t3);font-weight:400">(opcional)</span></label><input class="fi" type="date" id="dRevisar"/><div style="font-size:10.5px;color:var(--t3);margin-top:3px">Para revisão periódica (ex: POP a cada 2 anos)</div></div></div>
       <div class="fg" id="fgFilialDoc" style="display:none"><label class="fl">Filial do Documento <span style="color:var(--er)">*</span></label>
           <select class="fi" id="dFilial"></select>
         </div>
@@ -965,50 +965,43 @@ async function buildNotifs(){
     };
   });
 
-  // 3. Dynamic: treinamentos pending eficácia assessment (90 days after data_realizacao)
-  const hoje = new Date();
-  const limite90 = new Date(hoje); limite90.setDate(hoje.getDate() - 90);
-  let treinQ = sb.from('treinamentos')
+  // 3. Dynamic: Avaliação de Eficácia de treinamentos (prazo de 90 dias após realização)
+  //    Alerta a partir de 30 dias antes do prazo, e quando vencido.
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  const EFIC_PRAZO = 90;       // dias após realização para avaliar eficácia
+  const EFIC_AVISO = 30;       // antecedência do aviso
+  let treinEficQ = sb.from('treinamentos')
     .select('id,nome,data_realizacao,avaliacao_eficacia,filial')
     .eq('obsoleto', false)
     .is('excluido_em', null)
     .eq('avaliacao_eficacia', false)
-    .not('data_realizacao', 'is', null)
-    .lte('data_realizacao', limite90.toISOString().split('T')[0]);
-  if(filialAtiva && filialAtiva !== 'todas') treinQ = treinQ.eq('filial', filialAtiva);
-  const { data: treinPend } = await treinQ;
-  const eficAlerts = (treinPend||[]).map(t => ({
-    id: 'efic_'+t.id,
-    texto: '📋 Avaliação de Eficácia pendente',
-    descricao: t.nome + ' · Realizado em ' + fd(t.data_realizacao) + ' · Vencido há ' + Math.abs(Math.ceil((new Date(t.data_realizacao) - hoje + 90*86400000)/86400000)) + 'd',
-    tipo: 'wn',
-    lida: false,
-    _treinId: t.id,
-    _dynamic: true
-  }));
-
-  // 3. Dynamic: treinamentos approaching eficácia (between 75-89 days — 15 days warning)
-  const limite75 = new Date(hoje); limite75.setDate(hoje.getDate() - 75);
-  let treinApprQ = sb.from('treinamentos')
-    .select('id,nome,data_realizacao,avaliacao_eficacia,filial')
-    .eq('obsoleto', false)
-    .is('excluido_em', null)
-    .eq('avaliacao_eficacia', false)
-    .not('data_realizacao', 'is', null)
-    .gte('data_realizacao', limite90.toISOString().split('T')[0])
-    .lte('data_realizacao', limite75.toISOString().split('T')[0]);
-  if(filialAtiva && filialAtiva !== 'todas') treinApprQ = treinApprQ.eq('filial', filialAtiva);
-  const { data: treinAppr } = await treinApprQ;
-  const eficWarn = (treinAppr||[]).map(t => {
-    const daysLeft = 90 - Math.ceil((hoje - new Date(t.data_realizacao))/86400000);
-    return {
-      id: 'eficw_'+t.id,
-      texto: '⏳ Avaliação de Eficácia — ' + daysLeft + ' dias',
-      descricao: t.nome + ' · Prazo em ' + daysLeft + ' dias',
-      tipo: 'wn',
-      lida: false,
-      _dynamic: true
-    };
+    .not('data_realizacao', 'is', null);
+  if(filialAtiva && filialAtiva !== 'todas') treinEficQ = treinEficQ.eq('filial', filialAtiva);
+  const { data: treinEfic } = await treinEficQ;
+  const eficAlerts = [];
+  const eficWarn = [];
+  (treinEfic||[]).forEach(t => {
+    const real = new Date(t.data_realizacao); real.setHours(0,0,0,0);
+    const prazo = new Date(real); prazo.setDate(real.getDate() + EFIC_PRAZO);  // data limite p/ avaliar
+    const diasAteprazo = Math.ceil((prazo - hoje)/86400000);
+    const prazoStr = fd(prazo.toISOString().split('T')[0]);
+    if(diasAteprazo < 0){
+      // Vencido
+      eficAlerts.push({
+        id: 'efic_'+t.id,
+        texto: '📋 Avaliação de Eficácia VENCIDA',
+        descricao: esc(t.nome) + (t.filial?' · '+esc(t.filial):'') + ' · Prazo era ' + prazoStr + ' (há ' + Math.abs(diasAteprazo) + 'd)',
+        tipo: 'er', lida: false, _treinId: t.id, _dynamic: true
+      });
+    } else if(diasAteprazo <= EFIC_AVISO){
+      // Aproximando (dentro de 30 dias)
+      eficWarn.push({
+        id: 'eficw_'+t.id,
+        texto: '📋 Avaliação de Eficácia em ' + diasAteprazo + ' dias',
+        descricao: esc(t.nome) + (t.filial?' · '+esc(t.filial):'') + ' · Avaliar até ' + prazoStr,
+        tipo: diasAteprazo <= 7 ? 'wn' : 'in', lida: false, _treinId: t.id, _dynamic: true
+      });
+    }
   });
 
   // Audit due alerts
@@ -1198,6 +1191,7 @@ function newDoc(){
   }
   const valLbl=document.getElementById('dValLabel');
   if(valLbl) valLbl.textContent=(curV==='pops'||(curPastaId&&SMAP[curV]==='POPs'))?'Revisar em':'Data de Validade';
+  { const fgR=document.getElementById('fgRevisar'); if(fgR) fgR.style.display=(curV==='pops'||(curPastaId&&SMAP[curV]==='POPs'))?'none':''; }
   const fgFilial=document.getElementById('fgFilialDoc');
   const dFilial=document.getElementById('dFilial');
   if(isMatriz&&filialAtiva==='todas'){
@@ -1230,6 +1224,7 @@ async function editDoc(id){
   document.getElementById('fInput').value='';
   const valLbl=document.getElementById('dValLabel');
   if(valLbl) valLbl.textContent=(d.modulo==='POPs')?'Revisar em':'Data de Validade';
+  { const fgR=document.getElementById('fgRevisar'); if(fgR) fgR.style.display=(d.modulo==='POPs')?'none':''; }
   const {data:arqs}=await sb.from('arquivos').select('*').eq('documento_id',id);
   if(arqs&&arqs.length){
     let fhtml='';

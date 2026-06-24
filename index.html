@@ -272,6 +272,9 @@ textarea.fi{resize:vertical;min-height:70px}
 /* PASTA SYSTEM */
 .pasta-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:20px}
 .filial-sep{grid-column:1/-1;padding:8px 12px;background:var(--pxl);border:1px solid var(--bd2);border-radius:9px;display:flex;align-items:center;gap:8px}
+.lm-filial-head td{background:var(--pxl)!important;font-weight:800;color:var(--p);font-size:12.5px;letter-spacing:.3px;padding:9px 12px!important;border-top:2px solid var(--bd2)}
+.lm-filial-head td i{margin-right:5px}
+.lm-filial-count{float:right;font-size:10.5px;font-weight:700;color:var(--p);background:var(--sur);border:1px solid var(--bd2);padding:1px 9px;border-radius:20px}
 .pasta-card{background:var(--sur);border:1px solid var(--bd);border-radius:var(--r);padding:16px;cursor:pointer;transition:all .2s;position:relative;box-shadow:var(--sh)}
 .pasta-card:hover{border-color:var(--pl);box-shadow:0 4px 16px rgba(27,79,94,.12);transform:translateY(-2px)}
 .pasta-card .p-ico{font-size:32px;color:var(--p);margin-bottom:8px}
@@ -3304,22 +3307,41 @@ async function renderListaMestra(){
     const prox = D.filter(d=>d._ls==='p').length;
     const venc = D.filter(d=>d._ls==='x').length;
 
+    const colCount = filialAtiva==='todas' ? 7 : 6;
+    const rowHtml = (d)=>{
+      const val = d.val_indeterminada ? '<span style="color:var(--ok)">Indeterminada</span>' : (d.data_validade ? fd(d.data_validade) : '—');
+      return '<tr>'+
+        '<td style="font-weight:600">'+esc(d.nome)+'</td>'+
+        '<td style="color:var(--t2)">'+esc(d.modulo||'—')+(d.submodulo?' · '+esc(d.submodulo):'')+'</td>'+
+        (filialAtiva==='todas'?'<td><span style="font-size:10px;font-weight:700;background:var(--pxl);border:1px solid var(--bd2);color:var(--p);padding:1px 7px;border-radius:20px">'+esc(d.filial||'—')+'</span></td>':'')+
+        '<td style="text-align:center">'+esc(d.versao||'1.0')+'</td>'+
+        '<td>'+esc(d.responsavel||'—')+'</td>'+
+        '<td style="text-align:center">'+val+'</td>'+
+        '<td style="text-align:center">'+stB(d._ls)+'</td>'+
+        '</tr>';
+    };
+
     let rows = '';
     if(filtered.length === 0){
-      rows = '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--t3)">Nenhum documento encontrado para este filtro.</td></tr>';
-    } else {
-      filtered.forEach(d=>{
-        const val = d.val_indeterminada ? '<span style="color:var(--ok)">Indeterminada</span>' : (d.data_validade ? fd(d.data_validade) : '—');
-        rows += '<tr>'+
-          '<td style="font-weight:600">'+esc(d.nome)+'</td>'+
-          '<td style="color:var(--t2)">'+esc(d.modulo||'—')+(d.submodulo?' · '+esc(d.submodulo):'')+'</td>'+
-          (filialAtiva==='todas'?'<td><span style="font-size:10px;font-weight:700;background:var(--pxl);border:1px solid var(--bd2);color:var(--p);padding:1px 7px;border-radius:20px">'+esc(d.filial||'—')+'</span></td>':'')+
-          '<td style="text-align:center">'+esc(d.versao||'1.0')+'</td>'+
-          '<td>'+esc(d.responsavel||'—')+'</td>'+
-          '<td style="text-align:center">'+val+'</td>'+
-          '<td style="text-align:center">'+stB(d._ls)+'</td>'+
-          '</tr>';
+      rows = '<tr><td colspan="'+colCount+'" style="text-align:center;padding:30px;color:var(--t3)">Nenhum documento encontrado para este filtro.</td></tr>';
+    } else if(filialAtiva==='todas'){
+      // Group by filial (header separator), modulo order within each filial
+      const grupos = {};
+      filtered.forEach(d=>{ const f = d.filial||'— Sem filial —'; (grupos[f] = grupos[f]||[]).push(d); });
+      const nomesFiliais = Object.keys(grupos).sort((a,b)=>a.localeCompare(b,'pt'));
+      nomesFiliais.forEach(f=>{
+        const docsF = grupos[f].slice().sort((a,b)=>{
+          const am = (a.modulo||'')+(a.submodulo||''), bm = (b.modulo||'')+(b.submodulo||'');
+          return am.localeCompare(bm,'pt');
+        });
+        rows += '<tr class="lm-filial-head"><td colspan="'+colCount+'">'+
+          '<i class="ti ti-building"></i> '+esc(f)+
+          '<span class="lm-filial-count">'+docsF.length+' doc(s)</span>'+
+          '</td></tr>';
+        docsF.forEach(d=>{ rows += rowHtml(d); });
       });
+    } else {
+      filtered.forEach(d=>{ rows += rowHtml(d); });
     }
 
     const filialLabel = filialAtiva==='todas' ? 'Todas as Filiais' : filialAtiva;
@@ -3349,13 +3371,14 @@ async function renderListaMestra(){
             '</select>'+
           '</div>'+
           '<div style="display:flex;gap:6px;align-items:center"><span style="font-size:12px;color:var(--t2);font-weight:600">Ordenar por:</span>'+
-            '<select class="fi" style="width:auto;padding:6px 10px;font-size:12.5px" onchange="setMestraSort(this.value)">'+
+            '<select class="fi" style="width:auto;padding:6px 10px;font-size:12.5px"'+(filialAtiva==='todas'?' disabled title="Na visão Todas, os documentos são agrupados por filial e ordenados por módulo"':'')+' onchange="setMestraSort(this.value)">'+
               '<option value="modulo"'+(_mestraSortBy==='modulo'?' selected':'')+'>Módulo</option>'+
               '<option value="validade"'+(_mestraSortBy==='validade'?' selected':'')+'>Validade (vencer 1º)</option>'+
               '<option value="nome"'+(_mestraSortBy==='nome'?' selected':'')+'>Nome</option>'+
               '<option value="responsavel"'+(_mestraSortBy==='responsavel'?' selected':'')+'>Responsável</option>'+
             '</select>'+
           '</div>'+
+          (filialAtiva==='todas'?'<div style="font-size:11px;color:var(--t3);display:flex;align-items:center;gap:4px"><i class="ti ti-info-circle"></i>Agrupado por filial</div>':'')+
           '<div style="margin-left:auto;font-size:12px;color:var(--t3)">'+filtered.length+' exibido(s)</div>'+
         '</div>'+
         '<div class="tw"><table>'+
